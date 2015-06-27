@@ -72,7 +72,7 @@ var m = (function app(window, undefined) {
 
 		return cell;
 	}
-	function build(parentElement, parentTag, parentCache, parentIndex, data, cached, shouldReattach, index, editable, namespace, configs) {
+	function build(rootIndex, parentElement, parentTag, parentCache, parentIndex, data, cached, shouldReattach, index, editable, namespace, configs) {
 		//`build` is a recursive function that manages creation/diffing/removal of DOM elements based on comparison between `data` and `cached`
 		//the diff algorithm can be summarized as this:
 		//1 - compare `data` and `cached`
@@ -211,7 +211,7 @@ var m = (function app(window, undefined) {
 
 			for (var i = 0, cacheCount = 0, len = data.length; i < len; i++) {
 				//diff each item in the array
-				var item = build(parentElement, parentTag, cached, index, data[i], cached[cacheCount], shouldReattach, index + subArrayCount || subArrayCount, editable, namespace, configs);
+				var item = build(rootIndex, parentElement, parentTag, cached, index, data[i], cached[cacheCount], shouldReattach, index + subArrayCount || subArrayCount, editable, namespace, configs);
 				if (item === undefined) continue;
 				if (!item.nodes.intact) intact = false;
 				if (item.$trusted) {
@@ -252,7 +252,7 @@ var m = (function app(window, undefined) {
 					if (!data.attrs) data.attrs = {};
 					data.attrs.key = key;
 				}
-				if (controller.onunload) unloaders.push({controller: controller, handler: controller.onunload});
+				if (controller.onunload) unloaders[rootIndex].push({controller: controller, handler: controller.onunload});
 				views.push(view);
 				controllers.push(controller);
 			}
@@ -287,7 +287,7 @@ var m = (function app(window, undefined) {
 					//set attributes first, then create children
 					attrs: hasKeys ? setAttributes(node, data.tag, data.attrs, {}, namespace) : data.attrs,
 					children: data.children != null && data.children.length > 0 ?
-						build(node, data.tag, undefined, undefined, data.children, cached.children, true, 0, data.attrs.contenteditable ? node : editable, namespace, configs) :
+						build(rootIndex, node, data.tag, undefined, undefined, data.children, cached.children, true, 0, data.attrs.contenteditable ? node : editable, namespace, configs) :
 						data.children,
 					nodes: [node]
 				};
@@ -312,7 +312,7 @@ var m = (function app(window, undefined) {
 			else {
 				node = cached.nodes[0];
 				if (hasKeys) setAttributes(node, data.tag, data.attrs, cached.attrs, namespace);
-				cached.children = build(node, data.tag, undefined, undefined, data.children, cached.children, false, 0, data.attrs.contenteditable ? node : editable, namespace, configs);
+				cached.children = build(rootIndex, node, data.tag, undefined, undefined, data.children, cached.children, false, 0, data.attrs.contenteditable ? node : editable, namespace, configs);
 				cached.nodes.intact = true;
 				if (controllers.length) {
 					cached.views = views;
@@ -515,7 +515,10 @@ var m = (function app(window, undefined) {
 		if (isDocumentRoot && cell.tag != "html") cell = {tag: "html", attrs: {}, children: cell};
 		if (cellCache[id] === undefined) clear(node.childNodes);
 		if (forceRecreation === true) reset(root);
-		cellCache[id] = build(node, null, undefined, undefined, cell, cellCache[id], false, 0, null, undefined, configs);
+		var rootIndex = roots.indexOf(root);
+		if (rootIndex === -1) throw new Error("Unexpectedly missing root: " + JSON.stringify(root));
+		console.log("rendering rootIndex", rootIndex);
+		cellCache[id] = build(rootIndex, node, null, undefined, undefined, cell, cellCache[id], false, 0, null, undefined, configs);
 		for (var i = 0, len = configs.length; i < len; i++) configs[i]();
 	};
 	function getCellCacheKey(element) {
@@ -551,8 +554,17 @@ var m = (function app(window, undefined) {
 		return gettersetter(store);
 	};
 
-	var roots = [], components = [], controllers = [], lastRedrawId = null, lastRedrawCallTime = 0, computePreRedrawHook = null, computePostRedrawHook = null, topComponent, unloaders = [];
+	var roots = [];
+	var components = [];
+	var controllers = [];
+	var lastRedrawId = null;
+	var lastRedrawCallTime = 0;
+	var computePreRedrawHook = null;
+	var computePostRedrawHook = null;
+	var topComponent;
+	var unloaders = [];
 	var FRAME_BUDGET = 16; //60 frames per second = 1 call per 16 ms
+	
 	function parameterize(component, args) {
 		var controller = function() {
 			return (component.controller || noop).apply(this, args) || this;
@@ -571,31 +583,34 @@ var m = (function app(window, undefined) {
 	};
 	m.mount = m.module = function(root, component) {
 		if (!root) throw new Error("Please ensure the DOM element exists before rendering a template into it.");
-		var index = roots.indexOf(root);
-		if (index < 0) index = roots.length;
+		var rootIndex = roots.indexOf(root);
+		if (rootIndex < 0) {
+		    rootIndex = roots.length;
+		    unloaders[rootIndex] = [];
+		}
 
 		var isPrevented = false;
 		var event = {preventDefault: function() {
 			isPrevented = true;
 			computePreRedrawHook = computePostRedrawHook = null;
 		}};
-		for (var i = 0, unloader; unloader = unloaders[i]; i++) {
+		for (var i = 0, unloader; unloader = unloaders[rootIndex][i]; i++) {
 			unloader.handler.call(unloader.controller, event);
 			unloader.controller.onunload = null;
 		}
 		if (isPrevented) {
-			for (var i = 0, unloader; unloader = unloaders[i]; i++) unloader.controller.onunload = unloader.handler;
+			for (var i = 0, unloader; unloader = unloaders[rootIndex][i]; i++) unloader.controller.onunload = unloader.handler;
 		}
-		else unloaders = [];
+		else unloaders[rootIndex] = [];
 
-		if (controllers[index] && typeof controllers[index].onunload === FUNCTION) {
-			controllers[index].onunload(event);
+		if (controllers[rootIndex] && typeof controllers[rootIndex].onunload === FUNCTION) {
+			controllers[rootIndex].onunload(event);
 		}
 
 		if (!isPrevented) {
 			m.redraw.strategy("all");
 			m.startComputation();
-			roots[index] = root;
+			roots[rootIndex] = root;
 			if (arguments.length > 2) component = subcomponent(component, [].slice.call(arguments, 2));
 			var currentComponent = topComponent = component = component || {controller: function() {}};
 			var constructor = component.controller || noop;
@@ -603,11 +618,11 @@ var m = (function app(window, undefined) {
 			//controllers may call m.mount recursively (via m.route redirects, for example)
 			//this conditional ensures only the last recursive m.mount call is applied
 			if (currentComponent === topComponent) {
-				controllers[index] = controller;
-				components[index] = component;
+				controllers[rootIndex] = controller;
+				components[rootIndex] = component;
 			}
 			endFirstComputation();
-			return controllers[index];
+			return controllers[rootIndex];
 		}
 	};
 	var redrawing = false, forcing = false;
