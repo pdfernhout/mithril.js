@@ -463,7 +463,7 @@ m.route(document.body, &quot;/edit/1&quot;, {
 <h4 id="variadic-routes"><a href="#variadic-routes">Variadic routes</a></h4>
 <p>It&#39;s also possible to have variadic routes, i.e. a route with an argument that contains URL pathnames that contain slashes:</p>
 <pre><code class="lang-javascript">m.route(document.body, &quot;/edit/pictures/image.jpg&quot;, {
-    &quot;/files/:file...&quot;: Edit,
+    &quot;/edit/:file...&quot;: Edit,
 })
 </code></pre>
 <h4 id="handling-404s"><a href="#handling-404s">Handling 404s</a></h4>
